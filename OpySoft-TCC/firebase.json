@@ -1,7 +1,6 @@
 {
   "hosting": {
-    // 1. Aponta para a pasta onde o React/Vite será compilado
-    "public": "FrontEnd/dist", 
+    "public": "FrontEnd/dist",
     "ignore": [
       "firebase.json",
       "**/.*",
@@ -9,20 +8,28 @@
     ],
     "rewrites": [
       {
-        // 2. Regra CRÍTICA: Redireciona chamadas /api/* para a Cloud Function 'api'
-        "source": "/api/**",    
-        "function": "api"       
+        "source": "/api/**",
+        "function": "api"
       },
       {
-        // 3. Roteamento SPA para o React
         "source": "**",
         "destination": "/index.html"
       }
     ]
   },
-  
-  // 4. Diz ao Firebase onde está o código da função 'api'
   "functions": {
-    "source": "Functions" 
+    "source": "Functions"
+  },
+  "emulators": {
+    "functions": {
+      "port": 5001
+    },
+    "hosting": {
+      "port": 5000
+    },
+    "ui": {
+      "enabled": true
+    },
+    "singleProjectMode": true
   }
 }
