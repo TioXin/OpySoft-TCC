@@ -22,3 +22,15 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# Ignorar dependências
+node_modules/
+FrontEnd/node_modules/
+FrontEnd/Functions/node_modules/
+
+# Ignorar dados de emulador
+.firebase/
+
+# Ignorar arquivos de build e cache
+FrontEnd/dist/
+.env
