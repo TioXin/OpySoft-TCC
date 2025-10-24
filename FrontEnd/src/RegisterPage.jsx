@@ -1,11 +1,15 @@
 import React, { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
-import axios from 'axios'; // Importação do Axios
+import { useNavigate, Link } from 'react-router-dom'; // 🟢 NOVO: Importa Link
 import { Building2, Mail, Lock, Phone, Landmark } from 'lucide-react';
+
+// Importar Authentication e Firestore do seu config
+import { auth, db } from './firebase-config';
+import { createUserWithEmailAndPassword } from 'firebase/auth';
+import { doc, setDoc, serverTimestamp } from 'firebase/firestore'; 
 
 export default function RegisterCompanyPage() {
     const navigate = useNavigate();
-    
+
     const [formData, setFormData] = useState({
         nome_empresa: '',
         cnpj: '',
@@ -15,6 +19,9 @@ export default function RegisterCompanyPage() {
         password: '',
         confirmPassword: '',
     });
+    // 🟢 NOVO: Estado para controle da checkbox de termos
+    const [isTermsAccepted, setIsTermsAccepted] = useState(false);
+    
     const [isLoading, setIsLoading] = useState(false);
     const [error, setError] = useState(null);
 
@@ -25,9 +32,20 @@ export default function RegisterCompanyPage() {
         });
         setError(null);
     };
+    
+    // 🟢 NOVO: Função para alternar o estado da checkbox
+    const handleTermsToggle = () => {
+        setIsTermsAccepted(!isTermsAccepted);
+    };
 
     const handleSubmit = async (e) => {
         e.preventDefault();
+        
+        // 🟢 NOVO: Validação dos termos
+        if (!isTermsAccepted) {
+            setError("Você deve aceitar os Termos de Serviço para continuar.");
+            return;
+        }
 
         if (formData.password !== formData.confirmPassword) {
             setError("As senhas não coincidem.");
@@ -38,32 +56,71 @@ export default function RegisterCompanyPage() {
         setError(null);
 
         try {
-            // AQUI ESTÁ A CHAMADA CORRETA para o seu backend
-            const response = await axios.post('/api/register', {
+            // 1. CRIAÇÃO DE USUÁRIO (FIREBASE AUTH)
+            const userCredential = await createUserWithEmailAndPassword(
+                auth,
+                formData.email,
+                formData.password
+            );
+            const user = userCredential.user;
+            const uid = user.uid; // ID único gerado pelo Firebase Auth
+
+            // 2. SALVAR DADOS DA EMPRESA (FIRESTORE) - Coleção 'empresas'
+            const empresaRef = doc(db, "empresas", uid);
+
+            await setDoc(empresaRef, {
+                uid: uid,
                 nome_empresa: formData.nome_empresa,
                 cnpj: formData.cnpj,
                 razao_social: formData.razao_social,
-                email: formData.email,
+                email_contato: formData.email,
                 telefone: formData.telefone,
-                password: formData.password,
+                data_cadastro: serverTimestamp(),
             });
 
-            console.log("Cadastro bem-sucedido:", response.data);
+            // 3. SALVAR DOCUMENTO DE PERFIL (FIRESTORE) - Coleção 'users'
+            const userProfileRef = doc(db, "users", uid);
+            await setDoc(userProfileRef, {
+                uid: uid,
+                nome_empresa: formData.nome_empresa, 
+                email: formData.email,
+                criado_em: serverTimestamp(),
+            });
+
+
+            console.log("Cadastro bem-sucedido. UID:", uid);
             alert("Cadastro realizado com sucesso! Faça login.");
             navigate('/login');
 
-        } catch (err) {
-            const errorMessage = err.response?.data?.error || "Erro desconhecido. Verifique o console.";
-            console.error("Erro no registro:", err);
+        } catch (error) {
+            // Tratamento de erros de Auth do Firebase
+            let errorMessage = "Erro desconhecido durante o cadastro.";
+
+            if (error.code === 'auth/email-already-in-use') {
+                errorMessage = "Este email já está cadastrado. Tente fazer login.";
+            } else if (error.code === 'auth/invalid-email') {
+                errorMessage = "O formato do email é inválido.";
+            } else if (error.code === 'auth/weak-password') {
+                errorMessage = "A senha deve ter pelo menos 6 caracteres.";
+            } else {
+                // Erro de Firestore, ou outro erro inesperado
+                errorMessage = `Erro: ${error.message}`;
+            }
+
+            console.error("Erro no registro:", error);
             setError(errorMessage);
         } finally {
             setIsLoading(false);
         }
     };
 
+    // 🟢 Variável para controlar se o botão deve ser desabilitado
+    const isButtonDisabled = isLoading || !isTermsAccepted;
+
+
     return (
         <div className="min-h-screen bg-gradient-to-t from-cyan-700 to-sky-950 text-white flex flex-col items-center justify-center px-4">
-            
+
             {/* Header ... */}
             <header className="absolute top-0 left-0 w-full z-20 px-6 py-4 flex items-center justify-between">
                 <div className="flex items-center gap-2">
@@ -94,6 +151,8 @@ export default function RegisterCompanyPage() {
                 )}
 
                 <form className="space-y-5" onSubmit={handleSubmit}>
+                    {/* ... (Seus campos de formulário permanecem aqui) ... */}
+                    
                     {/* Nome da empresa */}
                     <div>
                         <label className="block text-sm mb-1">Nome da empresa</label>
@@ -213,13 +272,33 @@ export default function RegisterCompanyPage() {
                         </div>
                     </div>
 
+                    {/* 🟢 NOVO: Checkbox de Termos de Serviço */}
+                    <div className="flex items-center space-x-2 pt-2">
+                        <input
+                            type="checkbox"
+                            id="termsAcceptance"
+                            checked={isTermsAccepted}
+                            onChange={handleTermsToggle}
+                            className="h-4 w-4 text-cyan-500 focus:ring-cyan-500 border-gray-300 rounded"
+                        />
+                        <label htmlFor="termsAcceptance" className="text-sm text-gray-300">
+                            Eu li e concordo com os{' '}
+                            <Link to="/Termos" className="text-cyan-500 hover:text-sky-400 underline font-medium" target="_blank" rel="noopener noreferrer">
+                                Termos de Serviço
+                            </Link>
+                        </label>
+                    </div>
+
                     {/* Botão de cadastro */}
                     <button
                         type="submit"
-                        disabled={isLoading}
-                        className={`cursor-pointer w-full text-white font-semibold py-3 rounded-md shadow transition ${
-                            isLoading ? 'bg-gray-500' : 'bg-cyan-500 hover:bg-sky-700'
-                        }`}
+                        // 🟢 Modificado: Desabilita se isTermsAccepted for falso
+                        disabled={isButtonDisabled}
+                        className={`cursor-pointer w-full text-white font-semibold py-3 rounded-md shadow transition 
+                            ${isButtonDisabled 
+                                ? 'bg-gray-500 cursor-not-allowed' 
+                                : 'bg-cyan-500 hover:bg-sky-700'
+                            }`}
                     >
                         {isLoading ? 'Cadastrando...' : 'Cadastrar Empresa'}
                     </button>

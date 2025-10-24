@@ -1,17 +1,13 @@
-// index.js
 const functions = require("firebase-functions");
 const admin = require("firebase-admin");
 const express = require("express");
 const cors = require("cors");
 
-// ******************************************************
-// AÇÃO CRÍTICA: INICIALIZAÇÃO DEVE SER A PRIMEIRA A SER CHAMADA!
-// ******************************************************
+// Inicialização do Firebase Admin
 admin.initializeApp();
 
-// Importa o roteador SOMENTE DEPOIS que o Admin foi inicializado.
+// Importa o roteador. As rotas de API (ex: /api/inventario) estarão aqui.
 const routes = require("./routes");
-// const isAuthenticated = require('./authMiddleware'); // Comentado por enquanto, mas necessário para rotas protegidas
 
 const app = express();
 
@@ -21,7 +17,8 @@ const corsOptions = {
     "http://localhost:5173", // Porta padrão do Vite (Ambiente Dev)
     "http://127.0.0.1:5173",
     "http://localhost:3000", // Porta padrão do React CLI
-    "http://127.0.0.1:3000", // Adicione aqui o domínio de produção (ex: https://opysoft.web.app)
+    "http://127.0.0.1:3000",
+    // Adicione aqui o domínio de produção (ex: https://opysoft.web.app)
   ],
   credentials: true,
 };
@@ -30,6 +27,7 @@ app.use(express.json());
 // ---------------------------
 
 // --- Roteamento e Middleware ---
+// Todas as rotas (exceto a de registro, que está no Frontend) passam por aqui.
 app.use("/api", routes);
 
 // -------------------------------
