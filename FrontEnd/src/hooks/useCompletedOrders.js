@@ -17,7 +17,7 @@ export const useCompletedOrders = () => {
         }
 
         // Caminho para a subcoleção de pedidos
-        const baseCollection = collection(db, 'users', currentUser.uid, 'pedidos');
+        const baseCollection = collection(db, 'empresas', currentUser.uid, 'pedidos');
 
         // REQUER ÍNDICE: [status ASC, dataCriacao DESC]
         const q = query(

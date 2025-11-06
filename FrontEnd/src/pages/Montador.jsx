@@ -78,7 +78,7 @@ export default function Montador() {
             return;
         }
 
-        const inventoryCollectionRef = collection(db, 'users', currentUser.uid, 'inventario');
+        const inventoryCollectionRef = collection(db, 'empresas', currentUser.uid, 'inventario');
         const q = query(inventoryCollectionRef);
 
         const unsubscribe = onSnapshot(q, (snapshot) => {
@@ -218,7 +218,7 @@ export default function Montador() {
                 
                 // 1. LEITURAS (Regra do Firestore: reads before writes)
                 const inventoryRefs = itemsToDeduct.map(item => 
-                    doc(db, 'users', currentUser.uid, 'inventario', item.id)
+                    doc(db, 'empresas', currentUser.uid, 'inventario', item.id)
                 );
                 
                 const inventoryDocs = await Promise.all(
@@ -247,7 +247,7 @@ export default function Montador() {
                 }
 
                 // 3. ESCRITAS
-                const newOrderRef = doc(collection(db, 'users', currentUser.uid, 'pedidos'));
+                const newOrderRef = doc(collection(db, 'empresas', currentUser.uid, 'pedidos'));
                 
                 // A. Salva o Pedido
                 transaction.set(newOrderRef, { 

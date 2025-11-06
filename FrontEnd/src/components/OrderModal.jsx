@@ -1,8 +1,8 @@
 import React, { useState, useEffect } from "react";
 import { X, Plus, Trash2 } from "lucide-react";
 import { db } from '../firebase-config';
-import { collection, query, onSnapshot } from 'firebase/firestore'; 
-import { useAuth } from '../AuthContext'; 
+import { collection, query, onSnapshot } from 'firebase/firestore';
+import { useAuth } from '../AuthContext';
 
 const formatBRL = (value) => {
     const numValue = parseFloat(value) || 0;
@@ -12,46 +12,46 @@ const formatBRL = (value) => {
 export default function OrderModal({ onClose, onSave, orderToEdit }) {
     const { currentUser } = useAuth();
     const isEditing = !!orderToEdit;
-    
-    // Salva o status inicial para comparação na submissão
-    const initialStatus = orderToEdit?.status || "Pendente"; 
 
-    // Estados do Pedido
+    const initialStatus = orderToEdit?.status || "Pendente";
+
     const [client, setClient] = useState(orderToEdit?.clientName || orderToEdit?.client || "");
     const [status, setStatus] = useState(orderToEdit?.status || "Pendente");
     const [notes, setNotes] = useState(orderToEdit?.notes || "");
+    // Usamos 'components' no BD, mas 'components' localmente, seguindo o OrderModal.jsx
     const [components, setComponents] = useState(orderToEdit?.components || []);
-    
-    // Estado para a Margem de Lucro
-    const [profitMargin, setProfitMargin] = useState(orderToEdit?.profitMargin || 20); 
 
-    // Estado para o Inventário
+    const [profitMargin, setProfitMargin] = useState(orderToEdit?.profitMargin || 20);
+
     const [inventory, setInventory] = useState([]);
-    const [selectedItemSku, setSelectedItemSku] = useState("");
+    // CORREÇÃO: Usar o ID do documento do inventário como o item selecionado.
+    const [selectedItemId, setSelectedItemId] = useState("");
     const [loadingInventory, setLoadingInventory] = useState(true);
 
     const orderStatuses = ["Pendente", "Processando", "Enviados", "Entregues", "Cancelado"];
 
-    // Cálculo do Custo e Total
-    const costPrice = components.reduce((sum, item) => 
+    // Cálculo do Custo Total
+    const costPrice = components.reduce((sum, item) =>
         sum + ((parseFloat(item.price) || 0) * (parseInt(item.qty) || 0)), 0);
-        
+
+    // Cálculo do Preço Sugerido (Total da Venda)
     const suggestedPrice = costPrice * (1 + (Number(profitMargin) / 100));
 
-    // Efeito para buscar o Inventário
+    // Carrega Inventário
     useEffect(() => {
         if (!currentUser?.uid) {
             setLoadingInventory(false);
             return;
         }
 
-        const q = query(collection(db, 'users', currentUser.uid, 'inventario'));
-        
+        // Caminho do Inventário: empresas/{userId}/inventario
+        const q = query(collection(db, 'empresas', currentUser.uid, 'inventario'));
+
         const unsubscribe = onSnapshot(q, (snapshot) => {
             const items = snapshot.docs.map(doc => ({
-                id: doc.id,
+                id: doc.id, // ID do Documento do Firestore (essencial para a chave e a busca)
                 ...doc.data()
-            })).filter(item => (item.quantity > 0)); 
+            }));
 
             setInventory(items);
             setLoadingInventory(false);
@@ -63,48 +63,65 @@ export default function OrderModal({ onClose, onSave, orderToEdit }) {
         return unsubscribe;
     }, [currentUser]);
 
-    // Lógica de Itens
+    // Lógica para adicionar item ao pedido
     const handleAddComponent = () => {
-        if (!selectedItemSku) {
+        if (!selectedItemId) {
             alert("Selecione um item do inventário para adicionar.");
             return;
         }
 
-        const selectedItem = inventory.find(item => item.sku === selectedItemSku);
+        // Busca o item no inventário pelo seu ID
+        const selectedItem = inventory.find(item => item.id === selectedItemId);
         if (!selectedItem) return;
 
-        const existingIndex = components.findIndex(item => item.sku === selectedItemSku);
+        // Verifica se o item já está no pedido usando o ID
+        // O campo 'id' no componente do pedido é o ID do documento do inventário.
+        const existingIndex = components.findIndex(item => item.id === selectedItemId);
+
+        // MaxQty: quantidade atual em estoque
+        const maxQty = selectedItem.quantity || 0;
+
+        if (maxQty <= 0) {
+            alert(`O item ${selectedItem.component} está sem estoque. Não pode ser adicionado.`);
+            return;
+        }
 
         if (existingIndex !== -1) {
             const newComponents = [...components];
-            const currentQty = newComponents[existingIndex].qty;
-            const maxQty = selectedItem.quantity;
-            
-            if (currentQty < maxQty) {
-                 newComponents[existingIndex].qty = currentQty + 1;
-                 setComponents(newComponents);
+            const currentQtyInOrder = parseInt(newComponents[existingIndex].qty) || 0;
+
+            // Verifica se a quantidade total no pedido (atual + 1) excede o estoque.
+            if (currentQtyInOrder < maxQty) {
+                newComponents[existingIndex].qty = currentQtyInOrder + 1;
+                setComponents(newComponents);
             } else {
-                 alert(`Estoque máximo para ${selectedItem.component} atingido (${maxQty}).`);
+                alert(`Estoque máximo para ${selectedItem.component} atingido (${maxQty}).`);
             }
         } else {
-            setComponents([...components, { 
-                sku: selectedItem.sku, 
-                name: selectedItem.component, 
-                price: parseFloat(selectedItem.price) || 0, 
-                qty: 1, 
+            setComponents([...components, {
+                // CORREÇÃO: Usar selectedItem.id como o ID do componente do pedido.
                 id: selectedItem.id,
-                tempId: Date.now() 
+                sku: selectedItem.sku || "N/A",
+                name: selectedItem.component,
+                price: parseFloat(selectedItem.price) || 0, // Preço inicial do estoque
+                qty: 1, // Começa com 1
+                tempId: Date.now(), // ID temporário para key no React
             }]);
         }
-        setSelectedItemSku(""); 
+
+        // Limpa a seleção
+        setSelectedItemId("");
     };
 
+    // Lógica para atualizar quantidade/preço de um item existente
     const handleUpdateComponent = (index, field, value) => {
         const newComponents = [...components];
         let val = value;
         const itemToUpdate = newComponents[index];
-        const stockItem = inventory.find(item => item.sku === itemToUpdate.sku);
-        const maxQty = stockItem ? stockItem.quantity : 999; 
+
+        // Busca o item no estoque para checar a quantidade máxima
+        const stockItem = inventory.find(i => i.id === itemToUpdate.id);
+        const maxQty = stockItem ? stockItem.quantity : 999;
 
         if (field === 'qty') {
             val = parseInt(value) || 0;
@@ -112,10 +129,11 @@ export default function OrderModal({ onClose, onSave, orderToEdit }) {
                 alert(`A quantidade máxima permitida é ${maxQty} (estoque).`);
                 val = maxQty;
             } else if (val < 1) {
+                // Se tentar deletar o valor, volta para 1
                 val = 1;
             }
         } else if (field === 'price') {
-             val = parseFloat(value) || 0;
+            val = parseFloat(value) || 0;
         }
 
         newComponents[index][field] = val;
@@ -126,10 +144,10 @@ export default function OrderModal({ onClose, onSave, orderToEdit }) {
         setComponents(components.filter((_, i) => i !== index));
     };
 
-    // Submissão do Formulário
+    // Lógica de Submissão do Formulário
     const handleSubmit = (e) => {
         e.preventDefault();
-        
+
         if (!client.trim()) {
             alert("O nome do cliente é obrigatório.");
             return;
@@ -144,18 +162,20 @@ export default function OrderModal({ onClose, onSave, orderToEdit }) {
         }
 
         const orderData = {
-            id: orderToEdit?.id, 
+            id: orderToEdit?.id, // Presente se estiver editando
             clientName: client.trim(),
             initialStatus: isEditing ? initialStatus : null,
-            total: suggestedPrice, 
-            costPrice: costPrice, 
-            profitMargin: Number(profitMargin), 
+            total: suggestedPrice,
+            costPrice: costPrice,
+            profitMargin: Number(profitMargin),
             status: status,
             notes: notes.trim(),
+            // CORREÇÃO: Filtra o campo 'tempId' que é interno do React.
+            // O campo 'id' (ID do documento do inventário) permanece.
             components: components.map(({ tempId, ...rest }) => rest),
         };
 
-        onSave(orderData); 
+        onSave(orderData);
     };
 
     if (loadingInventory) {
@@ -168,24 +188,21 @@ export default function OrderModal({ onClose, onSave, orderToEdit }) {
 
     return (
         <div className="fixed inset-0 bg-black bg-opacity-70 flex items-center justify-center z-50 p-4">
-            
+
             <div className="bg-[#1e293b] text-white rounded-xl shadow-2xl w-full max-w-4xl max-h-[90vh] overflow-y-auto">
-                
-                {/* Cabeçalho (sticky top-0 para fixar durante a rolagem) */}
+
                 <div className="flex justify-between items-center p-6 border-b border-gray-700 sticky top-0 bg-[#1e293b] z-10">
                     <h2 className="text-2xl font-bold text-blue-400">
-                        {isEditing ? `Detalhes/Editar Pedido ${orderToEdit.id}` : "Novo Pedido Manual"}
+                        {isEditing ? `Detalhes/Editar Pedido ${orderToEdit.id?.substring(0, 6)}...` : "Novo Pedido Manual"}
                     </h2>
                     <button onClick={onClose} className="p-2 rounded-full hover:bg-gray-700 transition">
                         <X size={24} />
                     </button>
                 </div>
-                
+
                 <form onSubmit={handleSubmit}>
-                    {/* Conteúdo do Formulário */}
                     <div className="p-6 space-y-6">
-                        
-                        {/* Seção de Informações Básicas e Preços */}
+
                         <div className="grid grid-cols-1 md:grid-cols-4 gap-4 bg-[#0f172a] p-4 rounded-lg border border-gray-700">
                             <div>
                                 <label htmlFor="client" className="block text-sm font-medium mb-1 text-gray-400">Cliente</label>
@@ -196,9 +213,10 @@ export default function OrderModal({ onClose, onSave, orderToEdit }) {
                                     onChange={(e) => setClient(e.target.value)}
                                     required
                                     className="w-full p-2 rounded bg-[#1e293b] border border-gray-600"
+                                    placeholder="Nome do Cliente"
                                 />
                             </div>
-                            
+
                             <div>
                                 <label htmlFor="status" className="block text-sm font-medium mb-1 text-gray-400">Status</label>
                                 <select
@@ -210,7 +228,7 @@ export default function OrderModal({ onClose, onSave, orderToEdit }) {
                                     {orderStatuses.map(s => <option key={s} value={s}>{s}</option>)}
                                 </select>
                             </div>
-                            
+
                             <div>
                                 <label htmlFor="profitMargin" className="block text-sm font-medium mb-1 text-gray-400">Margem Lucro (%)</label>
                                 <input
@@ -222,7 +240,7 @@ export default function OrderModal({ onClose, onSave, orderToEdit }) {
                                     className="w-full p-2 rounded bg-[#1e293b] border border-gray-600"
                                 />
                             </div>
-                            
+
                             <div>
                                 <label className="block text-sm font-medium mb-1 text-gray-400">Custo Total (Cálculo)</label>
                                 <div className="w-full p-2 rounded bg-red-900/40 text-red-300 font-bold text-lg">
@@ -237,7 +255,7 @@ export default function OrderModal({ onClose, onSave, orderToEdit }) {
                                 {formatBRL(suggestedPrice)}
                             </div>
                         </div>
-                        
+
                         <div>
                             <label htmlFor="notes" className="block text-sm font-medium mb-1 text-gray-400">Notas</label>
                             <textarea
@@ -246,27 +264,30 @@ export default function OrderModal({ onClose, onSave, orderToEdit }) {
                                 onChange={(e) => setNotes(e.target.value)}
                                 rows="2"
                                 className="w-full p-2 rounded bg-[#0f172a] border border-gray-700"
+                                placeholder="Notas internas sobre o pedido..."
                             />
                         </div>
 
 
-                        {/* Seção de Adição de Itens */}
                         <h3 className="text-xl font-semibold border-b border-gray-700 pb-2 text-blue-300">Itens ({components.length})</h3>
-                        
+
                         <div className="flex gap-3 items-center p-3 bg-[#0f172a] rounded-lg border border-gray-800">
                             <select
-                                value={selectedItemSku}
-                                onChange={(e) => setSelectedItemSku(e.target.value)}
+                                // CORREÇÃO: Usar selectedItemId para o ID do documento do Inventário
+                                value={selectedItemId}
+                                onChange={(e) => setSelectedItemId(e.target.value)}
                                 className="flex-grow p-2 rounded bg-[#1e293b] border border-gray-600"
                             >
                                 <option value="">Selecione um item do Inventário...</option>
                                 {inventory.map(item => (
-                                    <option 
-                                        key={item.sku} 
-                                        value={item.sku}
+                                    <option
+                                        // CORREÇÃO: Usar item.id como a chave única (resolve erro de key duplicada)
+                                        key={item.id}
+                                        // CORREÇÃO: Passar item.id como valor
+                                        value={item.id}
                                         disabled={item.quantity <= 0}
                                     >
-                                        {item.component} ({item.category}) - Est.: {item.quantity}
+                                        {item.component} ({item.category}) - Est.: {item.quantity || 0}
                                     </option>
                                 ))}
                             </select>
@@ -274,13 +295,13 @@ export default function OrderModal({ onClose, onSave, orderToEdit }) {
                                 type="button"
                                 onClick={handleAddComponent}
                                 className="flex items-center gap-1 bg-blue-600 px-4 py-2 rounded-lg font-semibold hover:bg-blue-700 transition"
-                                disabled={!selectedItemSku}
+                                // CORREÇÃO: Desabilita se selectedItemId não estiver preenchido.
+                                disabled={!selectedItemId}
                             >
                                 <Plus size={18} /> Adicionar
                             </button>
                         </div>
-                        
-                        {/* Tabela de Itens */}
+
                         <div className="space-y-4">
                             <div className="grid grid-cols-12 gap-3 text-gray-400 font-medium pb-2 border-b border-gray-700">
                                 <div className="col-span-3">Nome</div>
@@ -292,58 +313,53 @@ export default function OrderModal({ onClose, onSave, orderToEdit }) {
                             </div>
 
                             {components.map((item, index) => {
-                                const stockItem = inventory.find(i => i.sku === item.sku);
+                                // Busca o estoque real para mostrar o máximo (se existir)
+                                const stockItem = inventory.find(i => i.id === item.id);
                                 const maxQty = stockItem ? stockItem.quantity : 999;
-                                
-                                return ( 
-                                <div key={item.tempId || item.id || index} className="grid grid-cols-12 gap-3 items-center border-b border-gray-800 pb-2">
-                                    {/* Nome (ReadOnly) */}
-                                    <div className="col-span-3 p-2 text-sm truncate">{item.name}</div>
-                                    {/* SKU (ReadOnly) */}
-                                    <div className="col-span-2 p-2 text-sm text-gray-500 truncate">{item.sku}</div>
-                                    {/* Preço (Editável) */}
-                                    <input
-                                        type="number"
-                                        step="0.01"
-                                        min="0"
-                                        value={item.price || 0}
-                                        onChange={(e) => handleUpdateComponent(index, 'price', e.target.value)}
-                                        required
-                                        className="col-span-2 p-2 rounded bg-[#1e293b] border border-gray-600 text-sm text-right"
-                                        title={`Preço de custo original: ${formatBRL(stockItem?.price || 0)}`}
-                                    />
-                                    {/* Quantidade (Editável) */}
-                                    <input
-                                        type="number"
-                                        min="1"
-                                        max={maxQty}
-                                        value={item.qty || 1}
-                                        onChange={(e) => handleUpdateComponent(index, 'qty', e.target.value)}
-                                        required
-                                        className="col-span-2 p-2 rounded bg-[#1e293b] border border-gray-600 text-sm text-center"
-                                        title={`Estoque disponível: ${maxQty}`}
-                                    />
-                                    {/* Subtotal */}
-                                    <div className="col-span-2 text-right font-medium text-yellow-400 text-sm">
-                                        {formatBRL((parseFloat(item.price) || 0) * (parseInt(item.qty) || 0))}
+
+                                return (
+                                    // Usar item.tempId para itens novos, ou item.id (ID do inventário) para itens existentes
+                                    <div key={item.tempId || item.id || index} className="grid grid-cols-12 gap-3 items-center border-b border-gray-800 pb-2">
+                                        <div className="col-span-3 p-2 text-sm truncate">{item.name}</div>
+                                        <div className="col-span-2 p-2 text-sm text-gray-500 truncate">{item.sku}</div>
+                                        <input
+                                            type="number"
+                                            step="0.01"
+                                            min="0"
+                                            value={item.price || 0}
+                                            onChange={(e) => handleUpdateComponent(index, 'price', e.target.value)}
+                                            required
+                                            className="col-span-2 p-2 rounded bg-[#1e293b] border border-gray-600 text-sm text-right"
+                                            title={`Preço de custo original: ${formatBRL(stockItem?.price || 0)}`}
+                                        />
+                                        <input
+                                            type="number"
+                                            min="1"
+                                            max={maxQty}
+                                            value={item.qty || 1}
+                                            onChange={(e) => handleUpdateComponent(index, 'qty', e.target.value)}
+                                            required
+                                            className="col-span-2 p-2 rounded bg-[#1e293b] border border-gray-600 text-sm text-center"
+                                            title={`Estoque disponível: ${maxQty}`}
+                                        />
+                                        <div className="col-span-2 text-right font-medium text-yellow-400 text-sm">
+                                            {formatBRL((parseFloat(item.price) || 0) * (parseInt(item.qty) || 0))}
+                                        </div>
+                                        <button
+                                            type="button"
+                                            onClick={() => handleRemoveComponent(index)}
+                                            className="col-span-1 p-2 rounded-full text-red-400 hover:bg-red-900/50 transition"
+                                            title="Remover Item"
+                                        >
+                                            <Trash2 size={18} />
+                                        </button>
                                     </div>
-                                    {/* Remover */}
-                                    <button 
-                                        type="button" 
-                                        onClick={() => handleRemoveComponent(index)}
-                                        className="col-span-1 p-2 rounded-full text-red-400 hover:bg-red-900/50 transition"
-                                        title="Remover Item"
-                                    >
-                                        <Trash2 size={18} />
-                                    </button>
-                                </div>
-                                ) 
+                                )
                             })}
                         </div>
 
                     </div>
 
-                    {/* Rodapé e Ações (sticky bottom-0 para fixar durante a rolagem) */}
                     <div className="p-6 flex justify-end gap-3 border-t border-gray-700 sticky bottom-0 bg-[#1e293b] z-10">
                         <button
                             type="button"

@@ -38,7 +38,7 @@ export default function Inventario() {
     }
 
     // Caminho consistente: /users/{userId}/inventario
-    const inventoryCollectionRef = collection(db, 'users', currentUser.uid, 'inventario');
+    const inventoryCollectionRef = collection(db, 'empresas', currentUser.uid, 'inventario');
     const q = query(inventoryCollectionRef);
 
     const unsubscribe = onSnapshot(q, (snapshot) => {
@@ -60,7 +60,7 @@ export default function Inventario() {
     if (!currentUser?.uid) return;
     try {
       // Cria a referência para o novo documento na subcoleção correta
-      const docRef = doc(collection(db, 'users', currentUser.uid, 'inventario'));
+      const docRef = doc(collection(db, 'empresas', currentUser.uid, 'inventario'));
       await setDoc(docRef, {
         ...newItemData,
         dataCriacao: new Date().toISOString(),
@@ -80,7 +80,7 @@ export default function Inventario() {
     if (!currentUser?.uid) return;
     try {
       // Referência para o documento específico a ser atualizado
-      const itemRef = doc(db, 'users', currentUser.uid, 'inventario', itemId);
+      const itemRef = doc(db, 'empresas', currentUser.uid, 'inventario', itemId);
       await setDoc(itemRef, updatedData, { merge: true });
       alert("Item atualizado com sucesso!");
     } catch (error) {
@@ -93,7 +93,7 @@ export default function Inventario() {
     if (!currentUser?.uid || !window.confirm("Tem certeza que deseja deletar este item?")) return;
     try {
       // Referência para o documento específico a ser deletado
-      await deleteDoc(doc(db, 'users', currentUser.uid, 'inventario', itemId));
+      await deleteDoc(doc(db, 'empresas', currentUser.uid, 'inventario', itemId));
       alert("Item deletado com sucesso!");
     } catch (error) {
       console.error("Erro ao deletar item:", error);
