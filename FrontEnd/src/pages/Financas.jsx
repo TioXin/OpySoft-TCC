@@ -207,60 +207,7 @@ export default function Financas() {
         <Card title="Lucro Líquido" icon={<DollarSign className={totalProfit >= 0 ? 'text-green-500' : 'text-red-500'} />} value={formatarMoeda(totalProfit)} />
       </div>
 
-      {/* Seção Gráfico e Histórico de Transações */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        {/* Gráfico de Linha (Melhoria) */}
-        <div className="lg:col-span-3 bg-[#1e293b] p-6 rounded-xl shadow-lg mb-8">
-          <h2 className="text-lg font-semibold mb-4">Tendência de Lucro Líquido (Últimos 12 Meses)</h2>
-          <div className="relative h-64 sm:h-80 lg:h-96">
-            <svg viewBox="0 0 100 100" preserveAspectRatio="none" className="w-full h-full">
-              {/* Linha Zero */}
-              <line x1="0" y1={zeroLineY} x2="100" y2={zeroLineY} stroke="#4b5563" strokeWidth="0.2" strokeDasharray="1,1" />
-
-              {/* Linha do Gráfico */}
-              <polyline
-                fill="none"
-                stroke="#3b82f6"
-                strokeWidth="0.5"
-                points={points}
-              />
-
-              {/* Pontos e Tooltips */}
-              {lucroPorMes.map((lucro, index) => {
-                const x = (index / (meses.length - 1)) * 100;
-                const y = getYPosition(lucro);
-                const isPositive = lucro >= 0;
-                const color = isPositive ? '#10b981' : '#ef4444'; // green-500 ou red-500
-                const tooltipText = `${meses[index]}: ${formatarMoeda(lucro)}`;
-
-                return (
-                  <g key={meses[index]}>
-                    {/* Ponto */}
-                    <circle cx={x} cy={y} r="1" fill={color} stroke="#1e293b" strokeWidth="0.5" />
-                    
-                    {/* Área de Interação (para tooltip) */}
-                    <rect x={x - 4} y="0" width="8" height="100" fill="transparent" className="hover:opacity-100 opacity-0 transition-opacity duration-300 cursor-pointer">
-                      <title>{tooltipText}</title>
-                    </rect>
-                  </g>
-                );
-              })}
-            </svg>
-            
-            {/* Eixo X (Rótulos dos Meses) */}
-            <div className="flex justify-between mt-2 text-xs text-gray-400 px-2">
-              {meses.map(mes => <span key={mes} className="w-1/12 text-center">{mes}</span>)}
-            </div>
-
-            {/* Eixo Y (Rótulos de Valor - Simplificado) */}
-            <div className="absolute top-0 left-0 h-full flex flex-col justify-between text-xs text-gray-400 -translate-x-full pr-2">
-                <span>{formatarMoeda(yMax)}</span>
-                <span>{formatarMoeda(0)}</span>
-                <span>{formatarMoeda(yMin)}</span>
-            </div>
-          </div>
-        </div>
-      </div>
+      
 
       {/* Histórico de Transações */}
       <div className="bg-[#1e293b] p-6 rounded-xl shadow-lg">

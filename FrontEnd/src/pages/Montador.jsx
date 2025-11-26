@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from "react";
 import { db } from '../firebase-config';
-import { collection, query, onSnapshot, serverTimestamp, doc, setDoc } from 'firebase/firestore';
+import { collection, query, onSnapshot, serverTimestamp, doc, setDoc, addDoc } from 'firebase/firestore';
 import { useAuth } from '../AuthContext';
 import AddOrderModal from "../components/AddOrderModal";
 import { updateStockTransaction } from '../utils/estoqueUtils'; // Importa a função de transação corrigida

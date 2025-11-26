@@ -12,14 +12,14 @@ export default function AddOSModal({ isOpen, onClose, onAdd, initialData = null 
     equipamento: initialData.equipamento || '',
     problema_relatado: initialData.problema_relatado || '',
     acessorios: initialData.acessorios || '',
-    valor_total: initialData.valor_total || 0,
+    valor_estimado: initialData.valor_estimado || 0,
   } : {
     cliente_nome: '',
     cliente_contato: '',
     equipamento: '',
     problema_relatado: '',
     acessorios: '',
-    valor_total: 0,
+    valor_estimado: 0,
   });
   const [isSaving, setIsSaving] = useState(false);
   const [clients, setClients] = useState([]);
@@ -83,7 +83,7 @@ export default function AddOSModal({ isOpen, onClose, onAdd, initialData = null 
     // Payload final
     const payload = {
       ...formData,
-      valor_total: parseFloat(formData.valor_total) || 0,
+      valor_estimado: parseFloat(formData.valor_estimado) || 0,
       cliente_id: selectedClientId, // Adiciona o ID do cliente selecionado
     };
 
@@ -98,7 +98,7 @@ export default function AddOSModal({ isOpen, onClose, onAdd, initialData = null 
             equipamento: '',
             problema_relatado: '',
             acessorios: '',
-            valor_total: 0,
+            valor_estimado: 0,
           });
           setSelectedClientId(null);
         }
@@ -210,12 +210,12 @@ export default function AddOSModal({ isOpen, onClose, onAdd, initialData = null 
                 />
               </div>
               <div>
-                <label htmlFor="valor_total" className="block text-sm font-semibold text-gray-300 mb-1">Valor Estimado (R$)</label>
+                <label htmlFor="valor_estimado" className="block text-sm font-semibold text-gray-300 mb-1">Valor Estimado (R$)</label>
                 <input
                   type="number"
-                  name="valor_total"
-                  id="valor_total"
-                  value={formData.valor_total}
+                  name="valor_estimado"
+                  id="valor_estimado"
+                  value={formData.valor_estimado}
                   onChange={handleChange}
                   min="0"
                   step="0.01"

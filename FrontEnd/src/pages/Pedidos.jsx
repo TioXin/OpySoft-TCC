@@ -68,7 +68,7 @@ export default function Pedidos() {
         costPrice: newOrderData.costPrice, profitMargin: newOrderData.profitMargin,
         status: newOrderData.status, notes: newOrderData.notes,
         components: newOrderData.components.map(comp => cleanOrderData(comp)),
-        valor_final: newOrderData.valor_final || newOrderData.total, // Salva o valor final
+        valor_final: newOrderData.valor_final || newOrderData.total,
       };
       if (newOrderData.id) {
         const orderRef = doc(baseCollection, newOrderData.id);
