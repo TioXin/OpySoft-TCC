@@ -1,9 +1,11 @@
 import React, { useState, useEffect } from 'react';
 import { db } from '../firebase-config';
-import { collection, query, onSnapshot, doc, setDoc, deleteDoc, orderBy, updateDoc } from 'firebase/firestore';
+import { collection, query, onSnapshot, doc, setDoc, deleteDoc, orderBy, updateDoc, where, getDocs } from 'firebase/firestore';
 import { useAuth } from '../AuthContext';
-import { Plus, Edit, Trash2, Search, Users, User, Briefcase, Phone, Mail, Clock } from 'lucide-react';
+import { Plus, Edit, Trash2, Search, Users, Clock, Package, DollarSign, Calendar } from 'lucide-react';
 import AddClientModal from '../components/AddClientModal';
+import { format } from 'date-fns';
+import { ptBR } from 'date-fns/locale';
 
 // Helper para formatar CPF/CNPJ (simples)
 const formatDocument = (doc) => {
@@ -18,6 +20,138 @@ const formatDocument = (doc) => {
   }
   return doc;
 };
+
+const formatBRL = (value) => {
+  const numValue = parseFloat(value) || 0;
+  return new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(numValue);
+};
+
+// Componente de Histórico de Pedidos (Modal)
+const ClientHistoryModal = ({ client, onClose }) => {
+  const { currentUser } = useAuth();
+  const [orders, setOrders] = useState([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    if (!currentUser?.uid || !client?.id) return;
+
+    // Busca pedidos e OSs associados ao cliente
+    const fetchHistory = async () => {
+      try {
+        // 1. Busca Pedidos
+        const pedidosQuery = query(
+          collection(db, "empresas", currentUser.uid, "pedidos"),
+          where("clientId", "==", client.id),
+          orderBy('dataCriacao', 'desc')
+        );
+        const pedidosSnapshot = await getDocs(pedidosQuery);
+        const pedidos = pedidosSnapshot.docs.map(doc => ({
+          id: doc.id,
+          ...doc.data(),
+          date: doc.data().dataCriacao?.toDate ? doc.data().dataCriacao.toDate() : new Date(),
+          valor_final: doc.data().valor_final || doc.data().total || doc.data().suggestedPrice || 0,
+          type: 'Pedido'
+        }));
+
+        // 2. Busca Ordens de Serviço (OS)
+        const osQuery = query(
+          collection(db, "empresas", currentUser.uid, "ordens_servico"),
+          where("cliente_id", "==", client.id),
+          orderBy('data_recebimento', 'desc')
+        );
+        const osSnapshot = await getDocs(osQuery);
+        const ordensServico = osSnapshot.docs.map(doc => ({
+          id: doc.id,
+          ...doc.data(),
+          date: new Date(doc.data().data_recebimento),
+          valor_final: doc.data().valor_final || 0,
+          type: 'OS',
+          status: doc.data().status, // Adiciona o status da OS
+        }));
+
+        // 3. Combina e ordena por data
+        const combined = [...pedidos, ...ordensServico].sort((a, b) => b.date - a.date);
+        setOrders(combined);
+        setLoading(false);
+      } catch (error) {
+        console.error("Erro ao buscar histórico:", error);
+        setLoading(false);
+      }
+    };
+
+    fetchHistory();
+  }, [currentUser, client]);
+
+  const getStatusStyle = (status) => {
+    switch (status) {
+      case 'Pendente': return 'bg-yellow-800 text-yellow-200';
+      case 'Processando': return 'bg-blue-800 text-blue-200';
+      case 'Enviados': return 'bg-purple-800 text-purple-200';
+      case 'Entregues': return 'bg-green-800 text-green-200';
+      case 'Cancelado': return 'bg-red-800 text-red-200';
+      default: return 'bg-gray-800 text-gray-400';
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 bg-black bg-opacity-70 flex items-center justify-center z-50 p-4">
+      <div className="bg-gray-800 text-white rounded-xl shadow-2xl w-full max-w-4xl max-h-[90vh] overflow-y-auto p-6 space-y-6">
+        <h2 className="text-2xl font-bold border-b border-gray-700 pb-3 flex items-center gap-2">
+          <Clock size={24} /> Histórico de Pedidos: {client.nome}
+        </h2>
+
+        {loading ? (
+          <div className="text-center py-10 text-gray-400">Carregando histórico...</div>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="min-w-full divide-y divide-gray-700">
+              <thead className="bg-gray-700">
+                <tr>
+                  <th className="px-4 py-3 text-left text-xs font-medium text-gray-300 uppercase tracking-wider">ID</th>
+                  <th className="px-4 py-3 text-left text-xs font-medium text-gray-300 uppercase tracking-wider">Data</th>
+                  <th className="px-4 py-3 text-left text-xs font-medium text-gray-300 uppercase tracking-wider">Status</th>
+                  <th className="px-4 py-3 text-right text-xs font-medium text-gray-300 uppercase tracking-wider">Valor Final</th>
+                </tr>
+              </thead>
+              <tbody className="bg-gray-800 divide-y divide-gray-700">
+                {orders.length > 0 ? (
+                  orders.map((order) => (
+                    <tr key={order.id} className="hover:bg-gray-700 transition duration-150">
+                      <td className="px-4 py-4 whitespace-nowrap text-sm text-blue-400">{order.type === 'OS' ? `OS-${order.id.substring(0, 6)}...` : `PED-${order.id.substring(0, 6)}...`}</td>
+                      <td className="px-4 py-4 whitespace-nowrap text-sm text-gray-300">{format(order.date, 'dd/MM/yyyy', { locale: ptBR })}</td>
+                      <td className="px-4 py-4 whitespace-nowrap text-sm">
+                        <span className={`px-2 inline-flex text-xs leading-5 font-semibold rounded-full ${getStatusStyle(order.status || (order.type === 'OS' ? order.status : ''))}`}>
+                          {order.status || (order.type === 'OS' ? order.status : 'N/A')}
+                        </span>
+                      </td>
+                      <td className="px-4 py-4 whitespace-nowrap text-sm font-bold text-right text-green-400">
+                        {formatBRL(order.valor_final)}
+                      </td>
+                    </tr>
+                  ))
+                ) : (
+                  <tr>
+                    <td colSpan="4" className="px-4 py-4 text-center text-gray-400">Nenhum pedido encontrado para este cliente.</td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        )}
+
+        <div className="flex justify-end">
+          <button
+            onClick={onClose}
+            className="bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 transition font-semibold"
+          >
+            Fechar
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+};
+
 
 export default function Clientes() {
   const { currentUser } = useAuth();
@@ -57,13 +191,13 @@ export default function Clientes() {
       client.nome.toLowerCase().includes(searchTerm.toLowerCase()) ||
       client.documento.toLowerCase().includes(searchTerm.toLowerCase()) ||
       client.email.toLowerCase().includes(searchTerm.toLowerCase());
-    
+
     return matchesSearch;
   });
 
   const handleAddClient = async (newClientData) => {
     try {
-  const clientRef = doc(collection(db, "empresas", currentUser.uid, "clientes"));
+      const clientRef = doc(collection(db, "empresas", currentUser.uid, "clientes"));
       await setDoc(clientRef, {
         ...newClientData,
         documento: newClientData.documento.replace(/\D/g, ''), // Salva apenas números
@@ -82,7 +216,7 @@ export default function Clientes() {
 
   const handleEditClient = async (id, updatedData) => {
     try {
-  await updateDoc(doc(db, "empresas", currentUser.uid, "clientes", id), {
+      await updateDoc(doc(db, "empresas", currentUser.uid, "clientes", id), {
         ...updatedData,
         documento: updatedData.documento.replace(/\D/g, ''), // Salva apenas números
         tipo: updatedData.documento.replace(/\D/g, '').length === 11 ? 'Pessoa Física' : 'Pessoa Jurídica',
@@ -100,7 +234,7 @@ export default function Clientes() {
   const handleDeleteClient = async (id) => {
     if (window.confirm('Tem certeza que deseja excluir este Cliente? Isso não excluirá Ordens de Serviço associadas.')) {
       try {
-  await deleteDoc(doc(db, "empresas", currentUser.uid, "clientes", id));
+        await deleteDoc(doc(db, "empresas", currentUser.uid, "clientes", id));
       } catch (error) {
         console.error("Erro ao excluir Cliente:", error);
         alert("Falha ao excluir cliente. Verifique o console para detalhes.");
@@ -113,7 +247,7 @@ export default function Clientes() {
   }
 
   return (
-    <div className="p-2 sm:p-6 w-full">
+    <div className="p-2 sm:p-6 w-full bg-[#0f172a] min-h-screen">
       <h1 className="text-2xl sm:text-3xl font-bold text-white mb-6 flex items-center">
         <Users className="mr-3" size={28} />
         Gestão de Clientes
@@ -121,13 +255,13 @@ export default function Clientes() {
 
       <div className="flex flex-col sm:flex-row gap-3 sm:justify-between sm:items-center mb-6">
         <div className="relative w-full sm:w-auto">
-            <input
-              type="text"
-              placeholder="Buscar por Nome, CPF/CNPJ ou Email..."
-              className="w-full pl-10 pr-4 py-2 border rounded-lg focus:ring-blue-500 focus:border-blue-500 bg-gray-700 text-white border-gray-600 placeholder-gray-400 text-sm sm:text-base"
-              value={searchTerm}
-              onChange={(e) => setSearchTerm(e.target.value)}
-            />
+          <input
+            type="text"
+            placeholder="Buscar por Nome, CPF/CNPJ ou Email..."
+            className="w-full pl-10 pr-4 py-2 border rounded-lg focus:ring-blue-500 focus:border-blue-500 bg-gray-700 text-white border-gray-600 placeholder-gray-400 text-sm sm:text-base"
+            value={searchTerm}
+            onChange={(e) => setSearchTerm(e.target.value)}
+          />
           <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400" size={18} />
         </div>
         <button
@@ -283,25 +417,12 @@ export default function Clientes() {
         />
       )}
 
-      {/* Seção de Histórico de Atendimentos (Placeholder) */}
+      {/* Modal de Histórico de Pedidos */}
       {selectedClient && (
-        <div className="mt-8 p-4 sm:p-6 bg-gray-800 shadow-lg rounded-lg border border-gray-700">
-          <h2 className="text-xl sm:text-2xl font-bold mb-4 flex items-center text-white">
-            <Clock className="mr-2 text-gray-400" size={24} />
-            Histórico de Atendimentos de {selectedClient.nome}
-          </h2>
-          <p className="text-gray-300 text-sm sm:text-base">
-            Aqui seria carregado o histórico de Ordens de Serviço e atendimentos do cliente {selectedClient.nome}.
-            <br/>
-            <strong>ID do Cliente:</strong> {selectedClient.id}
-          </p>
-          <button
-            onClick={() => setSelectedClient(null)}
-            className="mt-4 bg-gray-600 text-white px-4 py-2 rounded-lg hover:bg-gray-700 transition text-sm"
-          >
-            Fechar Histórico
-          </button>
-        </div>
+        <ClientHistoryModal
+          client={selectedClient}
+          onClose={() => setSelectedClient(null)}
+        />
       )}
     </div>
   );

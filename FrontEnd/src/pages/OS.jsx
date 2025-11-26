@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { db } from '../firebase-config';
-import { collection, query, onSnapshot, doc, setDoc, deleteDoc, orderBy, updateDoc } from 'firebase/firestore';
+import { collection, query, onSnapshot, doc, setDoc, deleteDoc, orderBy, updateDoc, addDoc, getDoc } from 'firebase/firestore';
 import { useAuth } from '../AuthContext';
 import { Plus, Edit, Trash2, Search, ClipboardList, Clock, CheckCircle, XCircle, AlertTriangle, Package, DollarSign, Wrench } from 'lucide-react';
 import AddOSModal from '../components/AddOSModal';
@@ -12,7 +12,7 @@ const OS_STATUS = [
   { value: 'Aguardando Peça', label: 'Aguardando Peça', icon: Package, color: 'bg-orange-500' },
   { value: 'Em Reparação', label: 'Em Reparação', icon: Wrench, color: 'bg-indigo-500' },
   { value: 'Aguardando Cliente', label: 'Aguardando Cliente', icon: AlertTriangle, color: 'bg-red-500' },
-  { value: 'Finalizado', label: 'Finalizado', icon: CheckCircle, color: 'bg-green-500' },
+  { value: 'Entregue/Pago', label: 'Entregue/Pago', icon: CheckCircle, color: 'bg-green-500' }, // NOVO STATUS
   { value: 'Cancelado', label: 'Cancelado', icon: XCircle, color: 'bg-gray-500' },
 ];
 
@@ -60,7 +60,7 @@ export default function OrdemDeServico() {
       order.cliente_nome.toLowerCase().includes(searchTerm.toLowerCase()) ||
       order.equipamento.toLowerCase().includes(searchTerm.toLowerCase()) ||
       order.id.toLowerCase().includes(searchTerm.toLowerCase());
-    
+
     const matchesStatus = filterStatus === '' || order.status === filterStatus;
 
     return matchesSearch && matchesStatus;
@@ -73,7 +73,9 @@ export default function OrdemDeServico() {
         ...newOrderData,
         data_recebimento: new Date().toISOString(),
         status: 'Recebido', // Status inicial
-        valor_total: parseFloat(newOrderData.valor_total) || 0,
+        valor_estimado: parseFloat(newOrderData.valor_estimado) || 0, // Renomeado para estimado
+        valor_final: 0, // Novo campo para o valor final
+        cliente_id: newOrderData.cliente_id, // Salva o ID do cliente
       });
       setIsAddModalOpen(false);
       return Promise.resolve(); // Retorna uma Promise resolvida para o modal
@@ -108,14 +110,53 @@ export default function OrdemDeServico() {
     }
   };
 
-  const handleUpdateStatus = async (id, newStatus) => {
-    try {
-      await updateDoc(doc(db, "empresas", currentUser.uid, "ordens_servico", id), {
-        status: newStatus,
-      });
-    } catch (error) {
-      console.error("Erro ao atualizar status:", error);
-      alert("Falha ao atualizar status. Verifique o console para detalhes.");
+  const handleUpdateStatus = async (order, newStatus) => {
+    if (newStatus === 'Entregue/Pago') {
+      const valorFinalStr = window.prompt(`Digite o VALOR FINAL da Ordem de Serviço ${order.id?.substring(0, 8) || 'N/A'}:`, order.valor_estimado || 0);
+      const valorFinal = parseFloat(valorFinalStr);
+
+      if (isNaN(valorFinal) || valorFinal <= 0) {
+        alert("Valor final inválido. A transação não será registrada.");
+        return;
+      }
+
+      try {
+        // 1. Atualiza a OS com o valor final e o novo status
+        // 1. Atualiza a OS com o valor final e o novo status
+        await updateDoc(doc(db, "empresas", currentUser.uid, "ordens_servico", order.id), {
+          status: newStatus,
+          valor_final: valorFinal,
+          data_entrega: new Date().toISOString(),
+        });
+
+        // 2. Cria a transação de Receita em Finanças
+        await addDoc(collection(db, "empresas", currentUser.uid, "transacoes"), {
+          tipo: 'Receita',
+          categoria: 'Ordem de Serviço',
+          descricao: `OS ${order.id?.substring(0, 8) || 'N/A'} - ${order.equipamento} (${order.cliente_nome})`,
+          valor: valorFinal,
+          data: new Date().toISOString(),
+          origem: 'OS',
+          os_id: order.id,
+          cliente_id: order.cliente_id, // Adiciona o ID do cliente para referência
+        });
+
+        alert(`✅ OS ${order.id?.substring(0, 8) || 'N/A'} marcada como Entregue/Pago. Receita de ${formatBRL(valorFinal)} registrada em Finanças.`);
+
+      } catch (error) {
+        console.error("Erro ao finalizar OS e registrar transação:", error);
+        alert("Falha ao finalizar OS e registrar transação. Verifique o console para detalhes.");
+      }
+    } else {
+      // Apenas atualiza o status para os outros casos
+      try {
+        await updateDoc(doc(db, "empresas", currentUser.uid, "ordens_servico", order.id), {
+          status: newStatus,
+        });
+      } catch (error) {
+        console.error("Erro ao atualizar status:", error);
+        alert("Falha ao atualizar status. Verifique o console para detalhes.");
+      }
     }
   };
 
@@ -163,7 +204,7 @@ export default function OrdemDeServico() {
       </div>
 
       {/* Versão Desktop - Tabela */}
-      <div className="hidden lg:block bg-gray-800 shadow-lg rounded-lg overflow-x-auto border border-gray-700">
+      <div className="hidden lg:block bg-gray-800 shadow-lg rounded-lg overflow-x-auto border border-gray-700 custom-scrollbar">
         <table className="w-full divide-y divide-gray-700">
           <thead className="bg-gray-700">
             <tr>
@@ -171,6 +212,7 @@ export default function OrdemDeServico() {
               <th className="px-4 sm:px-6 py-3 text-left text-xs font-medium text-gray-300 uppercase tracking-wider">Cliente</th>
               <th className="px-4 sm:px-6 py-3 text-left text-xs font-medium text-gray-300 uppercase tracking-wider">Equipamento</th>
               <th className="px-4 sm:px-6 py-3 text-left text-xs font-medium text-gray-300 uppercase tracking-wider">Valor Estimado</th>
+              <th className="px-4 sm:px-6 py-3 text-left text-xs font-medium text-gray-300 uppercase tracking-wider">Valor Final</th>
               <th className="px-4 sm:px-6 py-3 text-left text-xs font-medium text-gray-300 uppercase tracking-wider">Status</th>
               <th className="px-4 sm:px-6 py-3 text-left text-xs font-medium text-gray-300 uppercase tracking-wider">Recebimento</th>
               <th className="px-4 sm:px-6 py-3 text-right text-xs font-medium text-gray-300 uppercase tracking-wider">Ações</th>
@@ -185,7 +227,8 @@ export default function OrdemDeServico() {
                     <td className="px-4 sm:px-6 py-4 whitespace-nowrap text-sm font-medium text-white">{order.id.substring(0, 8)}</td>
                     <td className="px-4 sm:px-6 py-4 whitespace-nowrap text-sm text-gray-300">{order.cliente_nome}</td>
                     <td className="px-4 sm:px-6 py-4 whitespace-nowrap text-sm text-gray-300">{order.equipamento}</td>
-                    <td className="px-4 sm:px-6 py-4 whitespace-nowrap text-sm text-gray-300">{formatBRL(order.valor_total)}</td>
+                    <td className="px-4 sm:px-6 py-4 whitespace-nowrap text-sm text-gray-300">{formatBRL(order.valor_estimado)}</td>
+                    <td className="px-4 sm:px-6 py-4 whitespace-nowrap text-sm font-semibold text-green-400">{order.valor_final ? formatBRL(order.valor_final) : '-'}</td>
                     <td className="px-4 sm:px-6 py-4 whitespace-nowrap">
                       <span className={`px-2 inline-flex text-xs leading-5 font-semibold rounded-full text-white ${statusInfo.color}`}>
                         {statusInfo.label}
@@ -195,6 +238,15 @@ export default function OrdemDeServico() {
                       {new Date(order.data_recebimento).toLocaleDateString('pt-BR')}
                     </td>
                     <td className="px-4 sm:px-6 py-4 whitespace-nowrap text-right text-sm font-medium space-x-2">
+                      <select
+                        className="py-1 px-2 border rounded-lg text-xs bg-gray-700 text-white border-gray-600"
+                        onChange={(e) => handleUpdateStatus(order, e.target.value)}
+                        value={order.status}
+                      >
+                        {OS_STATUS.map(status => (
+                          <option key={status.value} value={status.value}>{status.label}</option>
+                        ))}
+                      </select>
                       <button
                         onClick={() => { setEditingOrder(order); setIsEditModalOpen(true); }}
                         className="text-indigo-400 hover:text-indigo-300 inline-block"
@@ -215,7 +267,7 @@ export default function OrdemDeServico() {
               })
             ) : (
               <tr>
-                <td colSpan="7" className="px-4 sm:px-6 py-4 text-center text-gray-400 bg-gray-800">Nenhuma Ordem de Serviço encontrada.</td>
+                <td colSpan="8" className="px-4 sm:px-6 py-4 text-center text-gray-400 bg-gray-800">Nenhuma Ordem de Serviço encontrada.</td>
               </tr>
             )}
           </tbody>
@@ -252,7 +304,12 @@ export default function OrdemDeServico() {
 
                   <div>
                     <p className="text-xs text-gray-400 uppercase">Valor Estimado</p>
-                    <p className="text-sm text-gray-300">{formatBRL(order.valor_total)}</p>
+                    <p className="text-sm text-gray-300">{formatBRL(order.valor_estimado)}</p>
+                  </div>
+
+                  <div>
+                    <p className="text-xs text-gray-400 uppercase">Valor Final</p>
+                    <p className="text-sm font-semibold text-green-400">{order.valor_final ? formatBRL(order.valor_final) : '-'}</p>
                   </div>
 
                   <div>
@@ -266,7 +323,7 @@ export default function OrdemDeServico() {
                     <p className="text-xs text-gray-400 uppercase mb-2">Atualizar Status</p>
                     <select
                       className="w-full py-1 px-2 border rounded-lg text-xs bg-gray-700 text-white border-gray-600"
-                      onChange={(e) => handleUpdateStatus(order.id, e.target.value)}
+                      onChange={(e) => handleUpdateStatus(order, e.target.value)}
                       value={order.status}
                     >
                       {OS_STATUS.map(status => (

@@ -1,7 +1,7 @@
-import React, { useState } from "react";
-import { DollarSign, TrendingDown, TrendingUp, Edit, Trash2 } from "lucide-react";
-import { useFinancas } from '../hooks/useFinancas';
-import { useRelatorios } from '../hooks/useRelatorios';
+import React, { useState, useMemo } from "react";
+import { DollarSign, TrendingDown, TrendingUp, Edit, Trash2, Search, Filter } from "lucide-react";
+import { useFinancas } from '../utils/useFinanças';
+
 
 import AddTransactionModal from '../components/AddTransactionModal';
 import EditTransactionModal from '../components/EditTransactionModal';
@@ -29,15 +29,23 @@ const Card = ({ title, icon, value }) => (
 
 export default function Financas() {
   const { transacoes, loading: loadingTransacoes, erro: erroTransacoes, summary, adicionarTransacao, deletarTransacao, atualizarTransacao } = useFinancas();
-  const { totalRevenue, totalCost, totalProfit, loading: loadingRelatorios, erro: erroRelatorios } = useRelatorios();
 
-  const loading = loadingTransacoes || loadingRelatorios;
-  const erro = erroTransacoes || erroRelatorios;
+  const { receitaTotal: totalRevenue, despesaTotal: totalCost, lucroLiquido: totalProfit } = summary;
+
+  const loading = loadingTransacoes;
+  const erro = erroTransacoes;
   const { currentUser } = useAuth();
 
   const [showAddModal, setShowAddModal] = useState(false);
   const [showEditModal, setShowEditModal] = useState(false);
   const [transactionToEdit, setTransactionToEdit] = useState(null);
+  
+  // Estados para Filtros
+  const [searchTerm, setSearchTerm] = useState('');
+  const [filterType, setFilterType] = useState(''); // 'Receita', 'Despesa'
+  const [filterCategory, setFilterCategory] = useState('');
+  const [filterStartDate, setFilterStartDate] = useState('');
+  const [filterEndDate, setFilterEndDate] = useState('');
 
   // Função de Salvar 
   const handleSaveTransaction = async (data) => {
@@ -66,6 +74,56 @@ export default function Financas() {
     }
   };
 
+  // Lógica de Filtragem
+  const filteredTransacoes = useMemo(() => {
+    if (!Array.isArray(transacoes)) return [];
+
+    return transacoes.filter(t => {
+      // Filtro por termo de busca (descrição ou categoria)
+      const matchesSearch = searchTerm === '' ||
+        t.descricao?.toLowerCase().includes(searchTerm.toLowerCase()) ||
+        t.categoria?.toLowerCase().includes(searchTerm.toLowerCase());
+
+      // Filtro por tipo
+      const matchesType = filterType === '' || t.tipo === filterType;
+
+      // Filtro por categoria
+      const matchesCategory = filterCategory === '' || t.categoria === filterCategory;
+
+      // Filtro por data
+      let matchesDate = true;
+      if (filterStartDate || filterEndDate) {
+        const transactionDate = t.data?.toDate ? t.data.toDate() : (t.data?.seconds ? new Date(t.data.seconds * 1000) : null);
+        if (transactionDate) {
+          if (filterStartDate) {
+            const start = new Date(filterStartDate);
+            start.setHours(0, 0, 0, 0);
+            matchesDate = matchesDate && transactionDate >= start;
+          }
+          if (filterEndDate) {
+            const end = new Date(filterEndDate);
+            end.setHours(23, 59, 59, 999);
+            matchesDate = matchesDate && transactionDate <= end;
+          }
+        }
+      }
+
+      return matchesSearch && matchesType && matchesCategory && matchesDate;
+    }).sort((a, b) => {
+      // Ordena por data (mais recente primeiro)
+      const dateA = a.data?.seconds || 0;
+      const dateB = b.data?.seconds || 0;
+      return dateB - dateA;
+    });
+  }, [transacoes, searchTerm, filterType, filterCategory, filterStartDate, filterEndDate]);
+
+  // Extrai categorias únicas para o filtro
+  const uniqueCategories = useMemo(() => {
+    const categories = new Set(transacoes.map(t => t.categoria).filter(Boolean));
+    return Array.from(categories).sort();
+  }, [transacoes]);
+
+
   if (loading) {
     return <div className="p-6 text-white text-center">Carregando dados financeiros...</div>;
   }
@@ -80,10 +138,10 @@ export default function Financas() {
     );
   }
 
+  // Lógica do Gráfico de Linha (Melhoria)
   const meses = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez'];
   const lucroPorMes = Array(12).fill(0);
-  let transacoesRecentes = [];
-
+  
   if (Array.isArray(transacoes)) {
     transacoes.forEach(t => {
       if (t.data && typeof t.data.toDate === 'function') {
@@ -94,20 +152,36 @@ export default function Financas() {
             lucroPorMes[mes] += valor;
           }
         } catch (e) {
-          console.warn("Transação ignorada por erro de data (toDate):", t);
+          // console.warn("Transação ignorada por erro de data (toDate):", t);
         }
       }
     });
-
-    transacoesRecentes = transacoes
-      .filter(t => t.data && typeof t.data.seconds === 'number') 
-      .sort((a, b) => (b.data.seconds || 0) - (a.data.seconds || 0)) 
-      .slice(0, 5);
   }
 
-  const maxAbsLucro = Math.max(...lucroPorMes.map(Math.abs), 1); 
-  const maxYLabel = formatarMoeda(maxAbsLucro);
-  const minYLabel = formatarMoeda(-maxAbsLucro);
+  const maxLucro = Math.max(...lucroPorMes, 0);
+  const minLucro = Math.min(...lucroPorMes, 0);
+  const range = maxLucro - minLucro;
+  const padding = range * 0.1; // 10% de padding
+  const maxAbs = Math.max(Math.abs(maxLucro), Math.abs(minLucro));
+  const yMax = maxAbs + padding;
+  const yMin = -maxAbs - padding;
+  const yRange = yMax - yMin;
+
+  // Função para calcular a posição Y de um ponto no gráfico (0 a 100)
+  const getYPosition = (value) => {
+    return 100 - ((value - yMin) / yRange) * 100;
+  };
+
+  // Cria os pontos para o gráfico de linha SVG
+  const points = lucroPorMes.map((lucro, index) => {
+    const x = (index / (meses.length - 1)) * 100;
+    const y = getYPosition(lucro);
+    return `${x},${y}`;
+  }).join(' ');
+
+  // Posição da linha zero (0)
+  const zeroLineY = getYPosition(0);
+
 
   return (
     <div className="p-6 bg-[#0f172a] text-white min-h-screen">
@@ -133,84 +207,163 @@ export default function Financas() {
         <Card title="Lucro Líquido" icon={<DollarSign className={totalProfit >= 0 ? 'text-green-500' : 'text-red-500'} />} value={formatarMoeda(totalProfit)} />
       </div>
 
-      {/* Seção Gráfico e Transações Recentes */}
+      {/* Seção Gráfico e Histórico de Transações */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        {/* Gráfico de Tendência */}
-        <div className="lg:col-span-2 bg-[#1e293b] p-6 rounded-xl shadow-lg">
-          <h2 className="text-lg font-semibold mb-4">Tendência de Lucro Líquido (Mês)</h2>
-          <div className="h-56 sm:h-64 lg:h-72 flex flex-col justify-end relative pt-6 pb-8">
+        {/* Gráfico de Linha (Melhoria) */}
+        <div className="lg:col-span-3 bg-[#1e293b] p-6 rounded-xl shadow-lg mb-8">
+          <h2 className="text-lg font-semibold mb-4">Tendência de Lucro Líquido (Últimos 12 Meses)</h2>
+          <div className="relative h-64 sm:h-80 lg:h-96">
+            <svg viewBox="0 0 100 100" preserveAspectRatio="none" className="w-full h-full">
+              {/* Linha Zero */}
+              <line x1="0" y1={zeroLineY} x2="100" y2={zeroLineY} stroke="#4b5563" strokeWidth="0.2" strokeDasharray="1,1" />
 
-            {/* Labels Y e Linha Zero */}
-            <span className="absolute left-0 top-0 text-xs text-gray-400">{maxYLabel}</span>
-            <span className="absolute left-0 bottom-6 text-xs text-gray-400">{minYLabel}</span>
-            <span className="absolute left-0 top-1/2 transform -translate-y-1/2 text-xs text-gray-400">R$ 0</span>
-            <div className="absolute left-10 right-0 h-px bg-gray-600 top-1/2"></div>
+              {/* Linha do Gráfico */}
+              <polyline
+                fill="none"
+                stroke="#3b82f6"
+                strokeWidth="0.5"
+                points={points}
+              />
 
-            {/* Container das Barras */}
-            <div className="flex h-full items-center justify-around ml-12 sm:ml-10 px-2">
+              {/* Pontos e Tooltips */}
               {lucroPorMes.map((lucro, index) => {
-                const percent = (Math.abs(lucro) / maxAbsLucro);
-                const barHeightPercent = Math.min(percent * 45, 45);
+                const x = (index / (meses.length - 1)) * 100;
+                const y = getYPosition(lucro);
                 const isPositive = lucro >= 0;
-                const colorClass = isPositive ? 'bg-green-500 hover:bg-green-400' : 'bg-red-500 hover:bg-red-400';
+                const color = isPositive ? '#10b981' : '#ef4444'; // green-500 ou red-500
                 const tooltipText = `${meses[index]}: ${formatarMoeda(lucro)}`;
 
                 return (
-                  <div key={meses[index]} className="flex flex-col items-center h-full w-full relative group">
-                    {/* Barra (Positiva ou Negativa) */}
-                    <div
-                      className={`w-3 sm:w-4 rounded-md transition-all duration-300 ${colorClass}`}
-                      style={{
-                        height: `${barHeightPercent}%`,
-                        transform: `translateY(${isPositive ? '-50%' : '50%'}) scaleY(${isPositive ? 1 : -1})`,
-                        position: 'absolute',
-                        bottom: '50%',
-                      }}
-                      title={tooltipText}
-                    >
-                      {/* Tooltip Customizado (opcional) */}
-                      <span className="absolute bottom-full mb-2 left-1/2 transform -translate-x-1/2 px-2 py-1 bg-gray-900 text-white text-xs rounded opacity-0 group-hover:opacity-100 transition whitespace-nowrap z-10">
-                        {tooltipText}
-                      </span>
-                    </div>
-                    {/* Rótulo do Mês (fixo embaixo) */}
-                    <span className="absolute -bottom-6 text-xs text-gray-400">{meses[index]}</span>
-                  </div>
+                  <g key={meses[index]}>
+                    {/* Ponto */}
+                    <circle cx={x} cy={y} r="1" fill={color} stroke="#1e293b" strokeWidth="0.5" />
+                    
+                    {/* Área de Interação (para tooltip) */}
+                    <rect x={x - 4} y="0" width="8" height="100" fill="transparent" className="hover:opacity-100 opacity-0 transition-opacity duration-300 cursor-pointer">
+                      <title>{tooltipText}</title>
+                    </rect>
+                  </g>
                 );
               })}
+            </svg>
+            
+            {/* Eixo X (Rótulos dos Meses) */}
+            <div className="flex justify-between mt-2 text-xs text-gray-400 px-2">
+              {meses.map(mes => <span key={mes} className="w-1/12 text-center">{mes}</span>)}
+            </div>
+
+            {/* Eixo Y (Rótulos de Valor - Simplificado) */}
+            <div className="absolute top-0 left-0 h-full flex flex-col justify-between text-xs text-gray-400 -translate-x-full pr-2">
+                <span>{formatarMoeda(yMax)}</span>
+                <span>{formatarMoeda(0)}</span>
+                <span>{formatarMoeda(yMin)}</span>
             </div>
           </div>
         </div>
+      </div>
 
-        {/* Transações Recentes */}
-        <div className="bg-[#1e293b] p-6 rounded-xl shadow-lg">
-          <h2 className="text-lg font-semibold mb-4">Transações Recentes</h2>
-          <ul className="space-y-3">
-            {transacoesRecentes.length > 0 ? (
-              transacoesRecentes.map((t) => (
-                <li key={t.id} className="flex flex-col sm:flex-row justify-between items-start sm:items-center text-sm border-b border-gray-700 pb-2 last:border-b-0">
-                  <div className="flex-1 truncate pr-2">
-                    <span className="block">{t.descricao || 'Transação'}</span>
-                    {/* Renderiza a data se for válida */}
-                    {t.data && t.data.toDate && <span className="text-xs text-gray-400 block sm:inline">{t.data.toDate().toLocaleDateString('pt-BR')}</span>}
-                  </div>
-                  <div className="flex items-center gap-3 mt-2 sm:mt-0">
-                    <span className={`font-medium ${t.tipo === 'Receita' ? 'text-green-400' : 'text-red-400'}`}>
-                      {formatarMoeda(t.valor)}
-                    </span>
-                    <button onClick={() => handleEditClick(t)} className="text-blue-400 hover:text-blue-300 transition p-1" title="Editar" aria-label={`Editar ${t.descricao || 'transação'}`}>
-                      <Edit size={16} />
-                    </button>
-                    <button onClick={() => handleDeleteClick(t.id)} className="text-red-400 hover:text-red-300 transition p-1" title="Deletar" aria-label={`Deletar ${t.descricao || 'transação'}`}>
-                      <Trash2 size={16} />
-                    </button>
-                  </div>
-                </li>
-              ))
-            ) : (
-              <li className="text-gray-400">Nenhuma transação recente encontrada.</li>
-            )}
-          </ul>
+      {/* Histórico de Transações */}
+      <div className="bg-[#1e293b] p-6 rounded-xl shadow-lg">
+        <h2 className="text-lg font-semibold mb-4 flex items-center gap-2"><Filter size={20} /> Histórico de Transações</h2>
+        
+        {/* Filtros */}
+        <div className="flex flex-wrap gap-4 mb-6 p-4 bg-gray-800 rounded-lg">
+          <div className="relative flex-1 min-w-[200px]">
+            <input
+              type="text"
+              placeholder="Buscar por descrição ou categoria..."
+              className="w-full pl-10 pr-4 py-2 border rounded-lg focus:ring-blue-500 focus:border-blue-500 bg-gray-700 text-white border-gray-600 placeholder-gray-400 text-sm"
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
+            />
+            <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400" size={18} />
+          </div>
+
+          <select
+            className="py-2 px-4 border rounded-lg focus:ring-blue-500 focus:border-blue-500 bg-gray-700 text-white border-gray-600 text-sm"
+            value={filterType}
+            onChange={(e) => setFilterType(e.target.value)}
+          >
+            <option value="">Todos os Tipos</option>
+            <option value="Receita">Receita</option>
+            <option value="Despesa">Despesa</option>
+          </select>
+
+          <select
+            className="py-2 px-4 border rounded-lg focus:ring-blue-500 focus:border-blue-500 bg-gray-700 text-white border-gray-600 text-sm"
+            value={filterCategory}
+            onChange={(e) => setFilterCategory(e.target.value)}
+          >
+            <option value="">Todas as Categorias</option>
+            {uniqueCategories.map(cat => (
+              <option key={cat} value={cat}>{cat}</option>
+            ))}
+          </select>
+
+          <input
+            type="date"
+            className="py-2 px-4 border rounded-lg focus:ring-blue-500 focus:border-blue-500 bg-gray-700 text-white border-gray-600 text-sm"
+            value={filterStartDate}
+            onChange={(e) => setFilterStartDate(e.target.value)}
+            title="Data Inicial"
+          />
+          <input
+            type="date"
+            className="py-2 px-4 border rounded-lg focus:ring-blue-500 focus:border-blue-500 bg-gray-700 text-white border-gray-600 text-sm"
+            value={filterEndDate}
+            onChange={(e) => setFilterEndDate(e.target.value)}
+            title="Data Final"
+          />
+        </div>
+
+        {/* Tabela de Histórico */}
+        <div className="overflow-x-auto">
+          <table className="min-w-full divide-y divide-gray-700">
+            <thead className="bg-gray-700">
+              <tr>
+                <th className="px-4 py-3 text-left text-xs font-medium text-gray-300 uppercase tracking-wider">Data</th>
+                <th className="px-4 py-3 text-left text-xs font-medium text-gray-300 uppercase tracking-wider">Descrição</th>
+                <th className="px-4 py-3 text-left text-xs font-medium text-gray-300 uppercase tracking-wider">Categoria</th>
+                <th className="px-4 py-3 text-left text-xs font-medium text-gray-300 uppercase tracking-wider">Tipo</th>
+                <th className="px-4 py-3 text-right text-xs font-medium text-gray-300 uppercase tracking-wider">Valor</th>
+                <th className="px-4 py-3 text-right text-xs font-medium text-gray-300 uppercase tracking-wider">Ações</th>
+              </tr>
+            </thead>
+            <tbody className="bg-gray-800 divide-y divide-gray-700">
+              {filteredTransacoes.length > 0 ? (
+                filteredTransacoes.map((t) => {
+                  const date = t.data?.toDate ? t.data.toDate() : (t.data?.seconds ? new Date(t.data.seconds * 1000) : null);
+                  return (
+                    <tr key={t.id} className="hover:bg-gray-700 transition duration-150">
+                      <td className="px-4 py-4 whitespace-nowrap text-sm text-gray-300">{date ? date.toLocaleDateString('pt-BR') : 'N/A'}</td>
+                      <td className="px-4 py-4 whitespace-nowrap text-sm font-medium text-white">{t.descricao}</td>
+                      <td className="px-4 py-4 whitespace-nowrap text-sm text-gray-400">{t.categoria}</td>
+                      <td className="px-4 py-4 whitespace-nowrap text-sm">
+                        <span className={`px-2 inline-flex text-xs leading-5 font-semibold rounded-full ${t.tipo === 'Receita' ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'}`}>
+                          {t.tipo}
+                        </span>
+                      </td>
+                      <td className={`px-4 py-4 whitespace-nowrap text-sm font-bold text-right ${t.tipo === 'Receita' ? 'text-green-400' : 'text-red-400'}`}>
+                        {formatarMoeda(t.valor)}
+                      </td>
+                      <td className="px-4 py-4 whitespace-nowrap text-right text-sm font-medium space-x-2">
+                        <button onClick={() => handleEditClick(t)} className="text-indigo-400 hover:text-indigo-300 inline-block" title="Editar">
+                          <Edit size={18} />
+                        </button>
+                        <button onClick={() => handleDeleteClick(t.id)} className="text-red-400 hover:text-red-300 inline-block" title="Excluir">
+                          <Trash2 size={18} />
+                        </button>
+                      </td>
+                    </tr>
+                  );
+                })
+              ) : (
+                <tr>
+                  <td colSpan="6" className="px-4 py-4 text-center text-gray-400">Nenhuma transação encontrada com os filtros aplicados.</td>
+                </tr>
+              )}
+            </tbody>
+          </table>
         </div>
       </div>
 
@@ -230,7 +383,6 @@ export default function Financas() {
             setTransactionToEdit(null);
           }}
           transactionToEdit={transactionToEdit}
-        // REMOVIDA A PROP onUpdate, pois o modal usa o hook useFinancas.
         />
       )}
     </div>

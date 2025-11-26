@@ -84,6 +84,7 @@ export default function AddOSModal({ isOpen, onClose, onAdd, initialData = null 
     const payload = {
       ...formData,
       valor_total: parseFloat(formData.valor_total) || 0,
+      cliente_id: selectedClientId, // Adiciona o ID do cliente selecionado
     };
 
     onAdd(payload)

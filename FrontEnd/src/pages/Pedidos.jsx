@@ -40,6 +40,7 @@ export default function Pedidos() {
           total: data.total || data.suggestedPrice || 0,
           client: data.clientName || data.client || 'N/A',
           status: data.status || 'Pendente',
+          valor_final: data.valor_final || data.total || data.suggestedPrice || 0, // Novo campo
         };
       });
       setOrders(fetchedOrders);
@@ -67,6 +68,7 @@ export default function Pedidos() {
         costPrice: newOrderData.costPrice, profitMargin: newOrderData.profitMargin,
         status: newOrderData.status, notes: newOrderData.notes,
         components: newOrderData.components.map(comp => cleanOrderData(comp)),
+        valor_final: newOrderData.valor_final || newOrderData.total, // Salva o valor final
       };
       if (newOrderData.id) {
         const orderRef = doc(baseCollection, newOrderData.id);
@@ -95,6 +97,19 @@ export default function Pedidos() {
 
     const orderRef = doc(db, 'empresas', currentUser.uid, 'pedidos', orderId);
 
+    // Lógica para registrar transação de Receita em Finanças
+    const handleFinanceTransaction = async (orderData, finalValue) => {
+      await addDoc(collection(db, "empresas", currentUser.uid, "transacoes"), {
+        tipo: 'Receita',
+        categoria: 'Venda de Produto',
+        descricao: `Pedido ${orderData.id?.substring(0, 6) || 'N/A'} - ${orderData.clientName || orderData.client}`,
+        valor: finalValue,
+        data: new Date().toISOString(),
+        origem: 'Pedido',
+        pedido_id: orderData.id,
+      });
+    };
+
     try {
       await runTransaction(db, async (transaction) => {
         const orderDoc = await transaction.get(orderRef);
@@ -109,48 +124,70 @@ export default function Pedidos() {
         if (isNowInConsumption && !wasInConsumption) multiplier = -1; // DEDUÇÃO
         if (wasInConsumption && !isNowInConsumption) multiplier = 1;  // ESTORNO
 
-        // Se não há mudança de estoque (ex: Pendente -> Processando), apenas atualiza o status.
-        if (multiplier === 0) {
-          transaction.update(orderRef, { status: newStatus, dataAtualizacao: serverTimestamp() });
-          return;
-        }
+        // --- ETAPA 1: Lógica de Estoque ---
+        if (multiplier !== 0) {
+          const components = orderData.components || [];
+          const inventoryUpdates = [];
 
-        // --- ETAPA 1: LEITURAS (READS) ---
-        // Prepara as referências e lê os documentos do inventário
-        const components = orderData.components || [];
-        const inventoryUpdates = [];
+          for (const item of components) {
+            const inventoryRef = doc(db, 'empresas', currentUser.uid, 'inventario', item.id);
+            const inventoryDoc = await transaction.get(inventoryRef);
 
-        for (const item of components) {
-          const inventoryRef = doc(db, 'empresas', currentUser.uid, 'inventario', item.id);
-          const inventoryDoc = await transaction.get(inventoryRef); // <-- LEITURA
+            if (!inventoryDoc.exists()) throw new Error(`Item do inventário (ID: ${item.id}) não encontrado.`);
 
-          if (!inventoryDoc.exists()) throw new Error(`Item do inventário (ID: ${item.id}) não encontrado.`);
+            const currentQty = parseFloat(inventoryDoc.data().quantity) || 0;
+            const itemQtyInOrder = parseFloat(item.qty || item.quantity || 0) || 0;
+            const newQty = currentQty + (itemQtyInOrder * multiplier);
 
-          const currentQty = parseFloat(inventoryDoc.data().quantity) || 0;
-          // O PC Montado armazena a quantidade do componente em 'quantity', o pedido manual em 'qty'.
-          const itemQtyInOrder = parseFloat(item.qty || item.quantity || 0) || 0;
-          const newQty = currentQty + (itemQtyInOrder * multiplier);
+            if (newQty < 0) throw new Error(`Estoque insuficiente para o item "${inventoryDoc.data().component || item.name}".`);
 
-          if (newQty < 0) throw new Error(`Estoque insuficiente para o item "${inventoryDoc.data().component || item.name}".`);
+            inventoryUpdates.push({
+              ref: inventoryRef,
+              quantity: String(newQty)
+            });
+          }
 
-          // Armazena a atualização para a etapa de escrita
-          inventoryUpdates.push({
-            ref: inventoryRef,
-            quantity: String(newQty)
+          // 1. Atualiza o inventário
+          inventoryUpdates.forEach(update => {
+            transaction.update(update.ref, { quantity: update.quantity });
           });
         }
 
-        // --- ETAPA 2: ESCRITAS (WRITES) ---
-        // 1. Atualiza o inventário
-        inventoryUpdates.forEach(update => {
-          transaction.update(update.ref, { quantity: update.quantity }); // <-- ESCRITA
-        });
+        // --- ETAPA 2: Lógica de Finanças e Status ---
+        let finalValue = orderData.valor_final || orderData.total || orderData.suggestedPrice || 0;
+        let updateData = { status: newStatus, dataAtualizacao: serverTimestamp() };
+
+        if (newStatus === 'Entregues' && oldStatus !== 'Entregues') {
+          const valorFinalStr = window.prompt(`Digite o VALOR FINAL do pedido ${orderData.id?.substring(0, 6) || 'N/A'}...:`, finalValue);
+          finalValue = parseFloat(valorFinalStr);
+
+          if (isNaN(finalValue) || finalValue <= 0) {
+            // Se o usuário cancelar ou inserir valor inválido, não prossegue com a transação
+            throw new Error("Transação cancelada: Valor final inválido ou não fornecido.");
+          }
+
+          updateData.valor_final = finalValue;
+          updateData.data_entrega = new Date().toISOString();
+
+          // 3. Cria a transação de Receita em Finanças (FORA DA TRANSAÇÃO DO FIREBASE)
+          // O addDoc não pode ser executado dentro de runTransaction, então vamos apenas atualizar o status e o valor final.
+          // A transação de Finanças será feita após o runTransaction ser bem-sucedido.
+        }
 
         // 2. Atualiza o status do pedido no final da transação bem-sucedida
-        transaction.update(orderRef, { status: newStatus, dataAtualizacao: serverTimestamp() }); // <-- ESCRITA
+        transaction.update(orderRef, updateData);
       });
 
-      alert(`Status do pedido atualizado para ${newStatus} e estoque ajustado com sucesso!`);
+      // Se o runTransaction foi bem-sucedido e o status é 'Entregues', registra a transação de Finanças
+      const order = orders.find(o => o.id === orderId);
+      if (newStatus === 'Entregues' && oldStatus !== 'Entregues') {
+        const updatedOrder = orders.find(o => o.id === orderId);
+        const finalValue = updatedOrder.valor_final || updatedOrder.total || updatedOrder.suggestedPrice || 0;
+        await handleFinanceTransaction(order, finalValue);
+        alert(`Status do pedido atualizado para ${newStatus}, estoque ajustado e Receita de ${formatBRL(finalValue)} registrada em Finanças!`);
+      } else {
+        alert(`Status do pedido atualizado para ${newStatus} e estoque ajustado com sucesso!`);
+      }
 
     } catch (error) {
       console.error("Erro na transação de estoque/status:", error);
@@ -189,14 +226,14 @@ export default function Pedidos() {
 
   const handleDeleteOrder = async (id) => {
     const order = orders.find(o => o.id === id);
-    if (!order || !window.confirm(`Tem certeza que deseja deletar o pedido ${id.substring(0, 6)}...?`)) return;
+    if (!order || !window.confirm(`Tem certeza que deseja deletar o pedido ${id?.substring(0, 6) || 'N/A'}...?`)) return;
     try {
       const CONSUMPTION_STATUSES = ['Enviados', 'Entregues'];
       if (CONSUMPTION_STATUSES.includes(order.status)) {
         await handleStockTransaction(id, 'Cancelado', order.status);
       }
       await deleteDoc(doc(db, 'empresas', currentUser.uid, 'pedidos', id));
-      alert(`Pedido ${id.substring(0, 6)}... deletado.`);
+      alert(`Pedido ${id?.substring(0, 6) || 'N/A'}... deletado.`);
     } catch (error) {
       console.error("Erro ao deletar pedido:", error);
       alert("Falha ao deletar o pedido. Detalhes: " + error.message);
@@ -246,7 +283,8 @@ export default function Pedidos() {
                   <th className="py-3 px-4 font-normal">ID</th>
                   <th className="py-3 px-4 font-normal">Cliente</th>
                   <th className="py-3 px-4 font-normal">Data</th>
-                  <th className="py-3 px-4 font-normal">Total</th>
+                  <th className="py-3 px-4 font-normal">Total Estimado</th>
+                  <th className="py-3 px-4 font-normal">Valor Final</th>
                   <th className="py-3 px-4 font-normal">Status</th>
                   <th className="py-3 px-4 font-normal">Ações</th>
                 </tr>
@@ -258,15 +296,18 @@ export default function Pedidos() {
                       <td className="py-4 px-4 text-blue-400 font-mono rounded-l-lg">{order.id.substring(0, 6)}...</td>
                       <td className="py-4 px-4 font-medium">{order.client}</td>
                       <td className="py-4 px-4 text-sm">{format(order.date, 'dd/MM/yyyy', { locale: ptBR })}</td>
-                      <td className="py-4 px-4 font-bold text-green-400">{formatBRL(order.total)}</td>
+                      <td className="py-4 px-4 font-bold text-yellow-400">{formatBRL(order.total)}</td>
+                      <td className="py-4 px-4 font-bold text-green-400">{formatBRL(order.valor_final)}</td>
                       <td className="py-4 px-4">
-                        <div className="relative inline-block" onClick={(e) => e.stopPropagation()}>
-                          <select value={order.status} onChange={(e) => handleUpdateStatus(order.id, e.target.value)} disabled={order.status === 'Cancelado'} className={`p-2 pr-8 rounded-lg text-xs font-semibold cursor-pointer border ${getStatusStyle(order.status)} focus:ring-blue-500 focus:border-blue-500 transition appearance-none ${order.status === 'Cancelado' ? 'opacity-50 cursor-not-allowed' : ''}`} style={{ WebkitAppearance: 'none', MozAppearance: 'none' }}>
+                        <div className={`inline-block px-3 py-1 text-xs font-semibold rounded-full border ${getStatusStyle(order.status)}`}>
+                          <select
+                            className={`appearance-none bg-transparent border-none focus:outline-none cursor-pointer ${getStatusStyle(order.status)}`}
+                            value={order.status}
+                            onChange={(e) => { e.stopPropagation(); handleUpdateStatus(order.id, e.target.value); }}
+                            onClick={(e) => e.stopPropagation()}
+                          >
                             {orderStatuses.map(status => <option key={status} value={status}>{status}</option>)}
                           </select>
-                          <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center px-2 text-white">
-                            <svg className="fill-current h-4 w-4" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20"><path d="M9.293 12.95l.707.707L15.657 8l-1.414-1.414L10 10.828 5.757 6.586 4.343 8z" /></svg>
-                          </div>
                         </div>
                       </td>
                       <td className="py-4 px-4 flex gap-1 rounded-r-lg" onClick={(e) => e.stopPropagation()}>
@@ -276,7 +317,7 @@ export default function Pedidos() {
                     </tr>
                   ))
                 ) : (
-                  <tr><td colSpan="6" className="text-center py-10 text-gray-500 bg-[#0f172a] rounded-lg">Nenhum pedido na categoria "{tab}".</td></tr>
+                  <tr><td colSpan="7" className="text-center py-10 text-gray-500 bg-[#0f172a] rounded-lg">Nenhum pedido na categoria "{tab}".</td></tr>
                 )}
               </tbody>
             </table>
